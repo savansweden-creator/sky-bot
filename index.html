@@ -1516,6 +1516,70 @@ function kbProcessFiles(files) {
   });
 }
 
+function kbIngestWorkbook(filename, wb) {
+  var meta = { name: filename, sheets: [], uploadedAt: new Date().toISOString() };
+  var newRows = [];
+  wb.SheetNames.forEach(function(sheetName) {
+    var rawRows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {defval:'', header:1});
+    if (!rawRows.length) return;
+    var headers = rawRows[0].map(function(h){ return h ? String(h).trim() : ''; });
+    var isFAQ = headers.some(function(h){ return /fr.ga|question/i.test(h); });
+    if (isFAQ) {
+      function findCol(patterns) {
+        for (var pi=0;pi<patterns.length;pi++)
+          for (var hi=0;hi<headers.length;hi++)
+            if (new RegExp(patterns[pi],'i').test(headers[hi])) return hi;
+        return -1;
+      }
+      var svQCol=findCol(['^fr.ga$','question.*sv','^fr']);
+      var svACol=findCol(['^svar$','^answer.*sv','^sv.*answer']);
+      var enQCol=findCol(['engelska','english','question.*en','^en.*question']);
+      var enACol=-1;
+      if (enQCol>=0) {
+        for (var ci=enQCol+1;ci<headers.length;ci++) { if(!headers[ci]||headers[ci]===''){enACol=ci;break;} }
+        if (enACol===-1 && enQCol+1<headers.length) enACol=enQCol+1;
+      }
+      var linkCol=findCol(['l.nkat','link','url','material']);
+      var aiACol =findCol(['svar ai','ai.*svar','answer.*ai']);
+      var added=0;
+      rawRows.slice(1).forEach(function(row){
+        var svQ=svQCol>=0?String(row[svQCol]||'').trim():'';
+        var svA=svACol>=0?String(row[svACol]||'').trim():'';
+        var enQ=enQCol>=0?String(row[enQCol]||'').trim():'';
+        var enA=enACol>=0?String(row[enACol]||'').trim():'';
+        var link=linkCol>=0?String(row[linkCol]||'').trim():'';
+        var aiA=aiACol>=0?String(row[aiACol]||'').trim():'';
+        var urls=(link.match(/https?:\/\/[^\s,]+/g)||[]).join(', ');
+        var question=enQ||svQ; var answer=enA||aiA||svA;
+        if (!question) return;
+        var flat={_file:filename,_sheet:sheetName,_type:'FAQ',Category:sheetName,
+          Question:question,Answer:answer||'',Question_SV:svQ,Answer_SV:svA};
+        if (urls) flat['Related Links']=urls;
+        newRows.push(flat); added++;
+      });
+      meta.sheets.push({name:sheetName,rowCount:added});
+    } else {
+      var dataRows=XLSX.utils.sheet_to_json(wb.Sheets[sheetName],{defval:''});
+      meta.sheets.push({name:sheetName,rowCount:dataRows.length});
+      dataRows.forEach(function(row){
+        var flat={_file:filename,_sheet:sheetName};
+        Object.keys(row).forEach(function(k){
+          var val=row[k];
+          if (val===null||val===undefined||val==='') return;
+          var strVal=String(val).trim();
+          if (strVal===''||strVal==='0') return;
+          flat[k.replace(/^Spec:\s*/i,'').trim()]=strVal;
+        });
+        if (Object.keys(flat).length>2) newRows.push(flat);
+      });
+    }
+  });
+  window._kbFiles=window._kbFiles.filter(function(f){return f.name!==filename;});
+  window._kbFiles.push(meta);
+  window._kbRows=window._kbRows.filter(function(r){return r._file!==filename;});
+  window._kbRows=window._kbRows.concat(newRows);
+}
+
 function kbAfterAll(prog, bar) {
   bar.style.width = '100%';
   try { localStorage.setItem('strands_kb_rows', JSON.stringify(window._kbRows)); } catch(e) {}
