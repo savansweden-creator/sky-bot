@@ -132,7 +132,7 @@ window._fbListen('strands/kb_files', function(snapshot) {
     var localRows = JSON.parse(localStorage.getItem('strands_kb_rows') || '[]')
       .filter(function(r){ return incoming.find(function(f){ return f.name === r._file; }); });
     if (localRows.length > 0) {
-      window._kbRows = enrichRowsIfNeeded(localRows);
+      window._kbRows = localRows;
       if (typeof renderKB    === 'function') renderKB();
       if (typeof updateStats === 'function') updateStats();
     } else if (window._firebaseReady) {
@@ -141,7 +141,7 @@ window._fbListen('strands/kb_files', function(snapshot) {
         var rows = snap.val();
         if (rows && Array.isArray(rows)) {
           var filtered = rows.filter(function(r){ return incoming.find(function(f){ return f.name === r._file; }); });
-          window._kbRows = enrichRowsIfNeeded(filtered);
+          window._kbRows = filtered;
           try { localStorage.setItem('strands_kb_rows', JSON.stringify(window._kbRows)); } catch(e) {}
         } else { window._kbRows = []; }
         if (typeof renderKB    === 'function') renderKB();
@@ -1697,6 +1697,52 @@ function buildKBContext(query) {
   return out.trim();
 }
 
+
+function detectLang(text) {
+  var t = text.toLowerCase();
+  var svChars = (text.match(/[åäöÅÄÖ]/g)||[]).length;
+  var words   = t.replace(/[^a-zåäöüéàèáóíñ\s]/gi,' ').split(/\s+/).filter(Boolean);
+  var svWords = ['och','att','det','är','för','med','som','till','kan','har','om','inte','men','från','vad','hur','när','var','tack','ja','nej','vill','finns','pris','ljus','bil','lampa'];
+  if (svChars >= 1 || words.filter(function(w){ return svWords.indexOf(w)!==-1; }).length >= 1) return 'sv';
+  var deChars = (text.match(/[üöäÜÖÄß]/g)||[]).length;
+  var deWords = ['und','die','der','das','ist','ich','nicht','mit','für','auf','ein','eine'];
+  if (deChars >= 2 || words.filter(function(w){ return deWords.indexOf(w)!==-1; }).length >= 2) return 'de';
+  var frChars = (text.match(/[éèêëàâùûîïœç]/g)||[]).length;
+  var frWords = ['est','les','des','une','pour','pas','avec','vous','bonjour','merci'];
+  if (frChars >= 2 || words.filter(function(w){ return frWords.indexOf(w)!==-1; }).length >= 2) return 'fr';
+  var esWords = ['que','con','para','una','como','más','pero','por','hay','hola','gracias'];
+  if ((text.match(/[áéíóúüñ¿¡]/g)||[]).length >= 2 || words.filter(function(w){ return esWords.indexOf(w)!==-1; }).length >= 2) return 'es';
+  if (/[\u0600-\u06FF]/.test(text)) return 'ar';
+  if (/[\u4E00-\u9FFF]/.test(text)) return 'zh';
+  return 'en';
+}
+
+function offlineSearch(query) {
+  if (!knowledgeRows.length) return null;
+  var q = (query||'').toLowerCase().trim();
+  if (!q) return null;
+  var tokens  = q.split(/\s+/).filter(function(t){ return t.length > 1; });
+  var numbers = q.match(/\d+/g) || [];
+  var scored  = knowledgeRows.map(function(row) {
+    var s = 0;
+    var allText = Object.keys(row).filter(function(k){ return k!=='_file'&&k!=='_sheet'&&k!=='_type'; })
+      .map(function(k){ return String(row[k]||''); }).join(' ').toLowerCase();
+    var sku  = String(row['sku']||row['SKU']||'').toLowerCase();
+    var name = String(row['name']||row['Name']||'').toLowerCase();
+    numbers.forEach(function(n){ if(sku.indexOf(n)!==-1) s+=50; if(allText.indexOf(n)!==-1) s+=5; });
+    tokens.forEach(function(t){ if(name.indexOf(t)!==-1) s+=20; if(allText.indexOf(t)!==-1) s+=3; });
+    return { row:row, score:s };
+  }).filter(function(x){ return x.score>0; }).sort(function(a,b){ return b.score-a.score; });
+  if (!scored.length) return null;
+  var top = scored.slice(0,3);
+  return top.map(function(x){
+    var r = x.row;
+    var name = r['name']||r['Name']||'';
+    var sku  = r['sku'] ||r['SKU'] ||'';
+    var desc = r['short_description']||r['Answer']||'';
+    return '<b>'+(name||sku)+'</b>'+(sku&&name?' ('+sku+')':'')+(desc?'<br>'+escHtml(String(desc).substring(0,200)):'');
+  }).join('<hr style="border-color:var(--brd);margin:8px 0">');
+}
 
 function processQuery(q, lang) {
   var btn = document.getElementById('sendBtn');
