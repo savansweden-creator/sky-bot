@@ -1516,6 +1516,96 @@ function kbProcessFiles(files) {
   });
 }
 
+function kbAfterAll(prog, bar) {
+  bar.style.width = '100%';
+  try { localStorage.setItem('strands_kb_rows', JSON.stringify(window._kbRows)); } catch(e) {}
+  if (window._firebaseReady) {
+    window._kbFiles.forEach(function(meta) {
+      window._fbSet('strands/kb_files/' + kbSafeKey(meta.name), meta);
+    });
+    var safeRows = window._kbRows.map(function(row) {
+      var clean = {};
+      Object.keys(row).forEach(function(k) {
+        clean[k.replace(/[.#$\/\[\]]/g, '_')] = row[k];
+      });
+      return clean;
+    });
+    window._fbSet('strands/kb_rows', safeRows);
+  }
+  setTimeout(function(){
+    prog.classList.remove('show'); bar.style.width = '0%';
+    renderKB();
+    updateStats();
+  }, 600);
+}
+
+function renderKB() {
+  var list     = document.getElementById('kbFileList');
+  var clearBtn = document.getElementById('clearKbBtn');
+  if (!list) return;
+  if (!window._kbFiles.length) {
+    list.innerHTML = '<div class="kb-empty">No files uploaded yet. Upload Excel or CSV files above to get started.</div>';
+    if (clearBtn) clearBtn.style.display = 'none';
+    return;
+  }
+  if (clearBtn) clearBtn.style.display = 'inline-block';
+  var html = '';
+  window._kbFiles.forEach(function(f) {
+    var totalRows = (f.sheets || []).reduce(function(a,s){ return a+(s.rowCount||0); }, 0);
+    var sheetTags = (f.sheets || []).map(function(s){
+      return '<span class="kb-sheet-tag">'+escHtml(s.name)+' ('+s.rowCount+' rows)</span>';
+    }).join('');
+    var d       = new Date(f.uploadedAt);
+    var dateStr = isNaN(d.getTime()) ? '' : d.toLocaleDateString()+' '+d.toLocaleTimeString();
+    var icon    = /\.csv$/i.test(f.name||'') ? '📄' : '📊';
+    var safeJs  = JSON.stringify(f.name);
+    html += '<div class="kb-file-item">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'
+      +'<div style="flex:1;min-width:0"><div class="kb-file-name">'+icon+' '+escHtml(f.name)+'</div>'
+      +'<div class="kb-file-meta">'+(f.sheets?f.sheets.length:0)+' sheet(s) &nbsp;·&nbsp; '+totalRows+' rows &nbsp;·&nbsp; '+dateStr+'</div></div>'
+      +'<button class="act-btn del" onclick="kbRemoveFile('+safeJs+')" style="flex-shrink:0">🗑 Remove</button>'
+      +'</div>'+(sheetTags?'<div class="kb-sheets" style="margin-top:8px">'+sheetTags+'</div>':'')+'</div>';
+  });
+  list.innerHTML = html;
+}
+
+function kbRemoveFile(filename) {
+  if (!confirm('Remove "'+filename+'" from the knowledge base?\nThis removes it for everyone immediately.')) return;
+  if (!window._kbIgnore) window._kbIgnore = {};
+  window._kbIgnore[filename] = true;
+  window._kbFiles = (window._kbFiles||[]).filter(function(f){ return f.name !== filename; });
+  window._kbMeta  = (window._kbMeta ||[]).filter(function(f){ return f.name !== filename; });
+  window._kbRows  = (window._kbRows ||[]).filter(function(r){ return r._file !== filename; });
+  try { localStorage.setItem('strands_kb_rows', JSON.stringify(window._kbRows)); } catch(e) {}
+  if (window._firebaseReady) {
+    var rem     = (window._kbFiles||[]).slice();
+    var remRows = (window._kbRows ||[]).slice();
+    window._fbRemove('strands/kb_files/'+kbSafeKey(filename)).then(function(){
+      return window._fbSet('strands/kb_rows', remRows);
+    }).then(function(){
+      setTimeout(function(){ if(window._kbIgnore) delete window._kbIgnore[filename]; }, 5000);
+    });
+  }
+  renderKB();
+  updateStats();
+}
+
+function removeKBFile(name) { kbRemoveFile(name); }
+
+function clearKnowledge() {
+  if (!confirm('Clear ALL knowledge base files?\nThis removes them for everyone immediately.')) return;
+  if (!window._kbIgnore) window._kbIgnore = {};
+  (window._kbFiles||[]).forEach(function(f){ window._kbIgnore[f.name]=true; });
+  window._kbFiles=[]; window._kbMeta=[]; window._kbRows=[];
+  try { localStorage.removeItem('strands_kb_rows'); } catch(e) {}
+  if (window._firebaseReady) {
+    window._fbRemove('strands/kb_files').then(function(){ setTimeout(function(){ window._kbIgnore={}; },2000); });
+    window._fbRemove('strands/kb_rows');
+  }
+  renderKB();
+  updateStats();
+}
+
 // ============================================================
 //  SIMPLE SEARCH — finds relevant rows from Excel data
 // ============================================================
