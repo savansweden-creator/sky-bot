@@ -127,27 +127,40 @@ window._fbListen('strands/kb_files', function(snapshot) {
 
   window._kbMeta  = incoming;
   window._kbFiles = incoming;
-  // Try localStorage first; if empty, pull rows from Firebase
-  try {
-    var localRows = JSON.parse(localStorage.getItem('strands_kb_rows') || '[]')
-      .filter(function(r){ return incoming.find(function(f){ return f.name === r._file; }); });
+
+  // Load rows — try localStorage first, then Firebase
+  // Retry loop handles case where Firebase isn't ready yet when this listener fires
+  function loadRows(attempt) {
+    var localRows = [];
+    try {
+      localRows = JSON.parse(localStorage.getItem('strands_kb_rows') || '[]')
+        .filter(function(r){ return incoming.find(function(f){ return f.name === r._file; }); });
+    } catch(e) {}
+
     if (localRows.length > 0) {
       window._kbRows = localRows;
       if (typeof renderKB    === 'function') renderKB();
       if (typeof updateStats === 'function') updateStats();
     } else if (window._firebaseReady) {
-      // No local rows — load from Firebase (other-device or fresh session)
       window._fbGet('strands/kb_rows').then(function(snap){
         var rows = snap.val();
-        if (rows && Array.isArray(rows)) {
+        if (rows && Array.isArray(rows) && rows.length > 0) {
           window._kbRows = rows.filter(function(r){ return incoming.find(function(f){ return f.name === r._file; }); });
-          try { localStorage.setItem('strands_kb_rows', JSON.stringify(window._kbRows)); } catch(e) {}
-        } else { window._kbRows = []; }
+        } else if (rows && typeof rows === 'object') {
+          // Handle object format (Firebase sometimes returns object instead of array)
+          window._kbRows = Object.values(rows).filter(function(r){ return r && incoming.find(function(f){ return f.name === r._file; }); });
+        } else {
+          window._kbRows = [];
+        }
         if (typeof renderKB    === 'function') renderKB();
         if (typeof updateStats === 'function') updateStats();
       }).catch(function(){ window._kbRows = []; });
+    } else if (attempt < 20) {
+      // Firebase not ready yet — retry every 500ms for up to 10 seconds
+      setTimeout(function(){ loadRows(attempt + 1); }, 500);
     }
-  } catch(e) { window._kbRows = []; }
+  }
+  loadRows(0);
 });
 
 // ── Log sync ─────────────────────────────────────────────────
@@ -2376,12 +2389,23 @@ function callAI(q, lang, done) {
     }
     var kbContext = buildKBContext(enrichedQuery);
 
-    // ── UPGRADE 2: Confidence check ───────────────────────────
-    // If no relevant rows found — show fallback immediately, don't let AI hallucinate
+    // ── Confidence check ──────────────────────────────────────
     if (!kbContext && knowledgeRows.length > 0) {
+      // No match found in loaded data — but let greetings and general questions through
+      var isGreeting = /^\s*(hi|hello|hey|good\s*(morning|afternoon|evening)|hej|tack|thanks|thank you|ok|okay|yes|no|sure)\s*[!.]?\s*$/i.test(q.trim());
+      if (!isGreeting) {
+        removeTyping();
+        appendMsg('bot', linkify(escHtml(fallbackMsg)), 'local');
+        logQuery(q, lang, false, 'local', '');
+        done();
+        return;
+      }
+    }
+
+    // If rows haven't loaded yet — tell user instead of wrong fallback
+    if (!kbContext && knowledgeRows.length === 0) {
       removeTyping();
-      appendMsg('bot', linkify(escHtml(fallbackMsg)), 'local');
-      logQuery(q, lang, false, 'local', '');
+      appendMsg('bot', 'Still loading product data, please wait a moment and try again.', 'local');
       done();
       return;
     }
