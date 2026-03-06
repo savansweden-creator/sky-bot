@@ -132,7 +132,7 @@ window._fbListen('strands/kb_files', function(snapshot) {
     var localRows = JSON.parse(localStorage.getItem('strands_kb_rows') || '[]')
       .filter(function(r){ return incoming.find(function(f){ return f.name === r._file; }); });
     if (localRows.length > 0) {
-      window._kbRows = localRows;
+      window._kbRows = enrichRowsIfNeeded(localRows);
       if (typeof renderKB    === 'function') renderKB();
       if (typeof updateStats === 'function') updateStats();
     } else if (window._firebaseReady) {
@@ -140,7 +140,8 @@ window._fbListen('strands/kb_files', function(snapshot) {
       window._fbGet('strands/kb_rows').then(function(snap){
         var rows = snap.val();
         if (rows && Array.isArray(rows)) {
-          window._kbRows = rows.filter(function(r){ return incoming.find(function(f){ return f.name === r._file; }); });
+          var filtered = rows.filter(function(r){ return incoming.find(function(f){ return f.name === r._file; }); });
+          window._kbRows = enrichRowsIfNeeded(filtered);
           try { localStorage.setItem('strands_kb_rows', JSON.stringify(window._kbRows)); } catch(e) {}
         } else { window._kbRows = []; }
         if (typeof renderKB    === 'function') renderKB();
@@ -918,6 +919,8 @@ function doUserLogin() {
 
 function loginAs(user) {
   currentUser = user;
+  // Save session so refresh doesn't log out
+  try { localStorage.setItem('strands_session', JSON.stringify({ username: user.username, role: user.role, ts: Date.now() })); } catch(e) {}
   ['adminModal','userModal'].forEach(closeModal);
   document.getElementById('loginOverlay').classList.add('hidden');
   document.getElementById('appHeader').style.display='flex';
@@ -1025,6 +1028,7 @@ function doLogout() {
   window._chatHistory = [];
   window._lastTopic = '';
   clearSessionTimer();
+  try { localStorage.removeItem('strands_session'); } catch(e) {}
   var nsBtn = document.getElementById('newSessionBtn');
   if (nsBtn) nsBtn.style.display = 'none';
   currentUser = null;
@@ -1512,6 +1516,18 @@ function kbProcessFiles(files) {
   });
 }
 
+// Re-enrich any rows that are missing the _search field
+// This runs when rows are loaded from Firebase or localStorage
+// so ALL users always get enriched search regardless of who uploaded
+function enrichRowsIfNeeded(rows) {
+  return rows.map(function(row) {
+    if (!row['_search'] && row['_type'] !== 'FAQ') {
+      row['_search'] = buildEnrichedSearchText(row);
+    }
+    return row;
+  });
+}
+
 // ============================================================
 //  ROW ENRICHMENT — runs at upload time, makes search much smarter
 //  Expands coded values into natural language search terms
@@ -1831,30 +1847,42 @@ function renderKB() {
 
 function kbRemoveFile(filename) {
   if (!confirm('Remove "' + filename + '" from the knowledge base?\nThis removes it for everyone immediately.')) return;
-  // Ignore this file so the Firebase listener never adds it back
+
+  // Mark as ignored FIRST before any async operations
   if (!window._kbIgnore) window._kbIgnore = {};
   window._kbIgnore[filename] = true;
-  // Wipe from local state
+
+  // Wipe from local state immediately
   window._kbFiles = (window._kbFiles || []).filter(function(f){ return f.name !== filename; });
   window._kbMeta  = (window._kbMeta  || []).filter(function(f){ return f.name !== filename; });
   window._kbRows  = (window._kbRows  || []).filter(function(r){ return r._file !== filename; });
   try { localStorage.setItem('strands_kb_rows', JSON.stringify(window._kbRows)); } catch(e) {}
-  // Remove from Firebase the SAME way clearKnowledge does:
-  // wipe entire node then re-write remaining files
-  if (window._firebaseReady) {
-    var remaining = (window._kbFiles || []).slice();
-    var remainingRows = (window._kbRows || []).slice();
-    window._fbRemove('strands/kb_files').then(function(){
-      remaining.forEach(function(meta){
-        window._fbSet('strands/kb_files/' + kbSafeKey(meta.name), meta);
-      });
-      // Re-write remaining rows so other users lose the deleted file's data too
-      window._fbSet('strands/kb_rows', remainingRows);
-      setTimeout(function(){ window._kbIgnore = {}; }, 2000);
-    });
-  }
+
   renderKB();
   updateStats();
+
+  // Sync to Firebase
+  if (window._firebaseReady) {
+    var remaining     = (window._kbFiles || []).slice();
+    var remainingRows = (window._kbRows  || []).slice();
+
+    // Remove this file's metadata from Firebase
+    window._fbRemove('strands/kb_files/' + kbSafeKey(filename)).then(function(){
+      // Re-write remaining rows (without deleted file's rows)
+      return window._fbSet('strands/kb_rows', remainingRows);
+    }).then(function(){
+      // Keep ignore active for 5 seconds so the Firebase listener doesn't re-add it
+      setTimeout(function(){ 
+        if (window._kbIgnore) delete window._kbIgnore[filename];
+      }, 5000);
+    }).catch(function(err){
+      console.warn('Firebase remove failed:', err);
+      // Keep ignore active even on error
+      setTimeout(function(){ 
+        if (window._kbIgnore) delete window._kbIgnore[filename];
+      }, 5000);
+    });
+  }
 }
 
 // Keep old name as alias so nothing else breaks
@@ -2584,8 +2612,13 @@ function callAI(q, lang, done) {
     var kbContext = buildKBContext(enrichedQuery);
 
     // ── UPGRADE 2: Confidence check ───────────────────────────
-    // If no relevant rows found — show fallback immediately, don't let AI hallucinate
-    if (!kbContext && knowledgeRows.length > 0) {
+    // If no KB rows found AND it's a product/specific question → show fallback
+    // BUT: greetings, general questions, small talk → let AI answer without KB
+    var isGreeting    = /^\s*(hi|hello|hey|good\s*(morning|afternoon|evening|day)|howdy|hola|hej|bonjour|salut|hallo|ciao|مرحبا|你好|سلام)\s*[!.]?\s*$/i.test(q.trim());
+    var isGeneralChat = /^(how are you|what can you do|what do you know|who are you|help me|what is your name|tell me about yourself|thanks|thank you|ok|okay|great|perfect|got it|sure|yes|no|alright)/i.test(q.trim());
+    var isGeneralKnowledge = q.trim().split(/\s+/).length <= 6 && !/\d{4,}/.test(q) && kbContext === '';
+
+    if (!kbContext && knowledgeRows.length > 0 && !isGreeting && !isGeneralChat && !isGeneralKnowledge) {
       removeTyping();
       appendMsg('bot', linkify(escHtml(fallbackMsg)), 'local');
       logQuery(q, lang, false, 'local', '');
@@ -3059,6 +3092,36 @@ document.addEventListener('DOMContentLoaded', function() {
   if (wm) { wm.querySelector('.welcome-title').textContent = welcomeTitle; wm.querySelector('.welcome-sub').innerHTML = welcomeSub; }
   renderSuggChips();
   renderChipList();
+
+  // Restore session after refresh — if valid saved session exists, log back in automatically
+  // Session expires after 8 hours
+  try {
+    var saved = localStorage.getItem('strands_session');
+    if (saved) {
+      var sess = JSON.parse(saved);
+      var age  = Date.now() - (sess.ts || 0);
+      var eightHours = 8 * 60 * 60 * 1000;
+      if (sess.username && age < eightHours) {
+        // Wait for Firebase to load users, then restore session
+        var restoreAttempts = 0;
+        var restoreInterval = setInterval(function() {
+          restoreAttempts++;
+          var found = users.find(function(u){ return u.username === sess.username && u.role === sess.role; });
+          if (found) {
+            clearInterval(restoreInterval);
+            loginAs(found);
+          } else if (restoreAttempts > 20) {
+            // After 10 seconds give up and show login
+            clearInterval(restoreInterval);
+            localStorage.removeItem('strands_session');
+          }
+        }, 500);
+      } else {
+        // Session expired — clear it
+        localStorage.removeItem('strands_session');
+      }
+    }
+  } catch(e) { localStorage.removeItem('strands_session'); }
 });
 </script>
 </body>
