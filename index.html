@@ -1698,6 +1698,47 @@ function buildKBContext(query) {
 }
 
 
+function sendMsg() {
+  var inp = document.getElementById('chatInput');
+  var q = inp.value.trim();
+  if (!q || !currentUser) return;
+  resetSessionTimer();
+  var btn = document.getElementById('sendBtn');
+  inp.value = '';
+  btn.disabled = true;
+  appendMsg('user', q);
+  showTyping();
+  setTimeout(function() { processQuery(q, null); }, 300);
+}
+
+function appendMsg(role, html, mode) {
+  var msgs = document.getElementById('msgs');
+  var welcome = msgs.querySelector('.welcome-msg');
+  if (welcome) welcome.remove();
+  var div = document.createElement('div');
+  div.className = 'msg ' + role;
+  var avatarChar = role==='user' ? (currentUser?currentUser.username[0].toUpperCase():'U') : '⚡';
+  var modeLabel = '';
+  if (mode) {
+    if (mode==='ai') modeLabel = '🤖 AI';
+    else if (mode==='chip') modeLabel = '💬 Quick Answer';
+    else modeLabel = '🔍 Offline search';
+  }
+  div.innerHTML = '<div class="msg-avatar">'+avatarChar+'</div>'
+    + '<div><div class="msg-body">'+html+'</div>'
+    + (mode ? '<div class="msg-mode">'+modeLabel+'</div>' : '')
+    + '</div>';
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return div;
+}
+
+var typingEl = null;
+function showTyping() {
+  typingEl = appendMsg('bot', '<div class="typing"><span></span><span></span><span></span></div>');
+}
+function removeTyping() { if(typingEl){typingEl.remove();typingEl=null;} }
+
 function detectLang(text) {
   var t = text.toLowerCase();
   var svChars = (text.match(/[åäöÅÄÖ]/g)||[]).length;
