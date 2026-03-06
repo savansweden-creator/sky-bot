@@ -140,8 +140,7 @@ window._fbListen('strands/kb_files', function(snapshot) {
       window._fbGet('strands/kb_rows').then(function(snap){
         var rows = snap.val();
         if (rows && Array.isArray(rows)) {
-          var filtered = rows.filter(function(r){ return incoming.find(function(f){ return f.name === r._file; }); });
-          window._kbRows = filtered;
+          window._kbRows = rows.filter(function(r){ return incoming.find(function(f){ return f.name === r._file; }); });
           try { localStorage.setItem('strands_kb_rows', JSON.stringify(window._kbRows)); } catch(e) {}
         } else { window._kbRows = []; }
         if (typeof renderKB    === 'function') renderKB();
@@ -406,7 +405,6 @@ select.f-input option{background:var(--p);color:#fff}
       </div>
       <div class="api-note" id="apiNote">Get your API key from the provider's developer dashboard.</div>
       <div><label class="f-label">API Key</label><input class="f-input" id="apiKeyInput" type="password" placeholder="sk-..."></div>
-      <div id="apiKeyStatus" style="font-family:'Barlow',sans-serif;font-size:11px;margin:-4px 0 8px;color:var(--txd)"></div>
       <div id="modelOverrideRow">
         <label class="f-label" id="modelRowLabel">Model <span style="color:var(--txd);font-weight:400" id="modelRowHint">(OpenRouter free models)</span></label>
         <select class="f-input" id="modelOverrideInput" style="margin-bottom:8px" onchange="onModelSelectChange()">
@@ -426,16 +424,14 @@ select.f-input option{background:var(--p);color:#fff}
           <option value="deepseek-chat">deepseek-chat — DeepSeek V3 ⭐ Recommended</option>
           <option value="deepseek-reasoner">deepseek-reasoner — DeepSeek R1 (Reasoning)</option>
         </select>
-        <div id="apiModelStatus" style="font-family:'Barlow',sans-serif;font-size:11px;margin:-4px 0 8px;color:var(--txd)"></div>
       </div>
       <div>
         <label class="f-label">System Prompt</label>
         <textarea class="f-input" id="sysPromptInput" rows="5" placeholder="You are a helpful support assistant for Strands..."></textarea>
       </div>
-      <button class="f-btn" onclick="saveApiSettings()">💾 Save & Sync to All Users</button>
-      <button class="f-btn" onclick="verifyFirebaseKey()" style="margin-top:6px;background:transparent;border:1px solid var(--dim);color:var(--txd)">🔍 Verify Key in Firebase</button>
+      <button class="f-btn" onclick="saveApiSettings()">Save & Sync</button>
       <button class="f-btn" onclick="testAIConnection()" style="margin-top:6px;background:transparent;border:1px solid var(--acc);color:var(--acc)">🧪 Test Connection</button>
-      <div class="ok-msg" id="apiOk">✓ Settings saved and synced to all users</div>
+      <div class="ok-msg" id="apiOk">✓ Settings saved and synced</div>
       <div id="aiTestResult" style="margin-top:10px;font-family:Barlow,sans-serif;font-size:12px;padding:10px;border-radius:0;display:none;word-break:break-all"></div>
     </div>
   </div>
@@ -919,8 +915,6 @@ function doUserLogin() {
 
 function loginAs(user) {
   currentUser = user;
-  // Save session so refresh doesn't log out
-  try { localStorage.setItem('strands_session', JSON.stringify({ username: user.username, role: user.role, ts: Date.now() })); } catch(e) {}
   ['adminModal','userModal'].forEach(closeModal);
   document.getElementById('loginOverlay').classList.add('hidden');
   document.getElementById('appHeader').style.display='flex';
@@ -1028,7 +1022,6 @@ function doLogout() {
   window._chatHistory = [];
   window._lastTopic = '';
   clearSessionTimer();
-  try { localStorage.removeItem('strands_session'); } catch(e) {}
   var nsBtn = document.getElementById('newSessionBtn');
   if (nsBtn) nsBtn.style.display = 'none';
   currentUser = null;
@@ -1050,10 +1043,6 @@ function switchTab(name) {
   document.getElementById('tab-'+name).classList.add('active');
   var idx = ['dashboard','knowledge','logs','users','settings'].indexOf(name);
   document.querySelectorAll('.a-tab')[idx].classList.add('active');
-  // Auto-verify Firebase key status when admin opens settings tab
-  if (name === 'settings') {
-    setTimeout(verifyFirebaseKey, 400);
-  }
 }
 
 // ============================================================
@@ -1115,107 +1104,26 @@ function onModelSelectChange() {
   custom.style.display = sel.value === 'custom' ? 'block' : 'none';
 }
 
-function verifyFirebaseKey() {
-  var statusEl = document.getElementById('apiKeyStatus');
-  var modelEl  = document.getElementById('apiModelStatus');
-  statusEl.textContent = '🔍 Checking Firebase...';
-  statusEl.style.color = 'var(--txd)';
-
-  if (!window._firebaseReady) {
-    statusEl.textContent = '⚠️ Firebase not connected — cannot verify';
-    statusEl.style.color = 'orange';
-    return;
-  }
-
-  // Check key
-  window._fbGet('strands/secrets/aiKey').then(function(snap) {
-    var key = snap.val();
-    if (key && key.length > 8) {
-      var masked = key.substring(0,6) + '••••••••••' + key.slice(-4);
-      statusEl.textContent = '✅ Firebase key confirmed: ' + masked;
-      statusEl.style.color = 'var(--ok)';
-      // Update in-memory key to match Firebase
-      apiKey = key;
-    } else {
-      statusEl.textContent = '❌ No key found in Firebase — please enter and save your key';
-      statusEl.style.color = 'var(--err)';
-    }
-  }).catch(function() {
-    statusEl.textContent = '❌ Could not read from Firebase. Check your connection.';
-    statusEl.style.color = 'var(--err)';
-  });
-
-  // Check model
-  window._fbGet('strands/secrets/aiModel').then(function(snap) {
-    var m = snap.val();
-    if (m && m.model) {
-      modelEl.textContent = '✅ Firebase model: ' + m.provider + ' / ' + m.model;
-      modelEl.style.color = 'var(--ok)';
-    } else {
-      modelEl.textContent = '⚠️ No model saved in Firebase yet — using local setting';
-      modelEl.style.color = 'orange';
-    }
-  }).catch(function(){});
-}
-
 function saveApiSettings() {
   var newKey       = document.getElementById('apiKeyInput').value.trim();
   apiProvider      = document.getElementById('providerSelect').value;
   apiModelOverride = getSelectedModel();
   sysPrompt        = document.getElementById('sysPromptInput').value.trim() || sysPrompt;
 
-  var ok = document.getElementById('apiOk');
-
-  // ── Handle API key ──
+  // Only update the in-memory key if admin typed a real key (not the masked placeholder)
   if (newKey && newKey !== '••••••••••••••••') {
-    // Admin typed a real new key — save it
     apiKey = newKey;
-    document.getElementById('apiKeyInput').value = '••••••••••••••••';
-    document.getElementById('apiKeyStatus').textContent = '✅ New key saved to Firebase';
-    document.getElementById('apiKeyStatus').style.color = 'var(--ok)';
-
+    // Save the real key to Firebase secrets only — never to localStorage or config
     if (window._firebaseReady) {
-      window._fbSet('strands/secrets/aiKey', apiKey).then(function() {
-        document.getElementById('apiKeyStatus').textContent = '✅ Key synced to Firebase — all users updated';
-        document.getElementById('apiKeyStatus').style.color = 'var(--ok)';
-      }).catch(function() {
-        document.getElementById('apiKeyStatus').textContent = '⚠️ Key saved locally but Firebase sync failed';
-        document.getElementById('apiKeyStatus').style.color = 'orange';
-      });
-    } else {
-      document.getElementById('apiKeyStatus').textContent = '⚠️ Key saved locally — Firebase not connected';
-      document.getElementById('apiKeyStatus').style.color = 'orange';
+      window._fbSet('strands/secrets/aiKey', apiKey);
     }
-  } else if (!newKey) {
-    document.getElementById('apiKeyStatus').textContent = '⚠️ No key entered — existing key unchanged';
-    document.getElementById('apiKeyStatus').style.color = 'var(--txd)';
-  }
-  // If dots — key field untouched, don't resave
-
-  // ── Always sync model + provider to Firebase ──
-  // This runs regardless of whether key changed
-  saveStorage();
-
-  // Show model sync status explicitly
-  var modelLabel = apiModelOverride || '(default)';
-  var provLabel  = apiProvider || 'openrouter';
-
-  if (window._firebaseReady) {
-    window._fbSet('strands/secrets/aiModel', { provider: provLabel, model: modelLabel }).then(function() {
-      document.getElementById('apiModelStatus').textContent = '✅ Model synced: ' + provLabel + ' / ' + modelLabel;
-      document.getElementById('apiModelStatus').style.color = 'var(--ok)';
-    }).catch(function() {
-      document.getElementById('apiModelStatus').textContent = '⚠️ Model saved locally — Firebase sync failed';
-      document.getElementById('apiModelStatus').style.color = 'orange';
-    });
-  } else {
-    document.getElementById('apiModelStatus').textContent = '⚠️ Model saved locally — Firebase not connected';
-    document.getElementById('apiModelStatus').style.color = 'orange';
+    // Re-mask the input after saving
+    document.getElementById('apiKeyInput').value = '••••••••••••••••';
   }
 
+  saveStorage(); // saves everything except apiKey
   updateAIBadge();
-  ok.classList.add('show');
-  setTimeout(function(){ ok.classList.remove('show'); }, 3000);
+  var ok = document.getElementById('apiOk'); ok.classList.add('show'); setTimeout(()=>ok.classList.remove('show'),3000);
 }
 
 function testAIConnection() {
@@ -1519,74 +1427,117 @@ function kbProcessFiles(files) {
 function kbIngestWorkbook(filename, wb) {
   var meta = { name: filename, sheets: [], uploadedAt: new Date().toISOString() };
   var newRows = [];
+
   wb.SheetNames.forEach(function(sheetName) {
     var rawRows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {defval:'', header:1});
     if (!rawRows.length) return;
+
     var headers = rawRows[0].map(function(h){ return h ? String(h).trim() : ''; });
+
+    // ── Detect FAQ structure: has 'Fråga'/'Engelska' columns ──
     var isFAQ = headers.some(function(h){ return /fr.ga|question/i.test(h); });
+
     if (isFAQ) {
+      // Find column indexes for FAQ structure
       function findCol(patterns) {
-        for (var pi=0;pi<patterns.length;pi++)
-          for (var hi=0;hi<headers.length;hi++)
-            if (new RegExp(patterns[pi],'i').test(headers[hi])) return hi;
+        for (var pi = 0; pi < patterns.length; pi++) {
+          for (var hi = 0; hi < headers.length; hi++) {
+            if (new RegExp(patterns[pi], 'i').test(headers[hi])) return hi;
+          }
+        }
         return -1;
       }
-      var svQCol=findCol(['^fr.ga$','question.*sv','^fr']);
-      var svACol=findCol(['^svar$','^answer.*sv','^sv.*answer']);
-      var enQCol=findCol(['engelska','english','question.*en','^en.*question']);
-      var enACol=-1;
-      if (enQCol>=0) {
-        for (var ci=enQCol+1;ci<headers.length;ci++) { if(!headers[ci]||headers[ci]===''){enACol=ci;break;} }
-        if (enACol===-1 && enQCol+1<headers.length) enACol=enQCol+1;
+      var svQCol  = findCol(['^fr.ga$', 'question.*sv', '^fr']);
+      var svACol  = findCol(['^svar$', '^answer.*sv', '^sv.*answer']);
+      var enQCol  = findCol(['engelska', 'english', 'question.*en', '^en.*question']);
+      // English answer is typically the unnamed column right after Engelska
+      var enACol  = -1;
+      if (enQCol >= 0) {
+        for (var ci = enQCol + 1; ci < headers.length; ci++) {
+          if (!headers[ci] || headers[ci] === '') { enACol = ci; break; }
+        }
+        // If still not found, check for column after enQCol that has answer content
+        if (enACol === -1 && enQCol + 1 < headers.length) enACol = enQCol + 1;
       }
-      var linkCol=findCol(['l.nkat','link','url','material']);
-      var aiACol =findCol(['svar ai','ai.*svar','answer.*ai']);
-      var added=0;
-      rawRows.slice(1).forEach(function(row){
-        var svQ=svQCol>=0?String(row[svQCol]||'').trim():'';
-        var svA=svACol>=0?String(row[svACol]||'').trim():'';
-        var enQ=enQCol>=0?String(row[enQCol]||'').trim():'';
-        var enA=enACol>=0?String(row[enACol]||'').trim():'';
-        var link=linkCol>=0?String(row[linkCol]||'').trim():'';
-        var aiA=aiACol>=0?String(row[aiACol]||'').trim():'';
-        var urls=(link.match(/https?:\/\/[^\s,]+/g)||[]).join(', ');
-        var question=enQ||svQ; var answer=enA||aiA||svA;
-        if (!question) return;
-        var flat={_file:filename,_sheet:sheetName,_type:'FAQ',Category:sheetName,
-          Question:question,Answer:answer||'',Question_SV:svQ,Answer_SV:svA};
-        if (urls) flat['Related Links']=urls;
-        newRows.push(flat); added++;
+      var linkCol = findCol(['l.nkat', 'link', 'url', 'material']);
+      var aiACol  = findCol(['svar ai', 'ai.*svar', 'answer.*ai']);
+
+      var dataRows = rawRows.slice(1);
+      var added = 0;
+      dataRows.forEach(function(row) {
+        var svQ  = svQCol  >= 0 ? String(row[svQCol]  || '').trim() : '';
+        var svA  = svACol  >= 0 ? String(row[svACol]  || '').trim() : '';
+        var enQ  = enQCol  >= 0 ? String(row[enQCol]  || '').trim() : '';
+        var enA  = enACol  >= 0 ? String(row[enACol]  || '').trim() : '';
+        var link = linkCol >= 0 ? String(row[linkCol] || '').trim() : '';
+        var aiA  = aiACol  >= 0 ? String(row[aiACol]  || '').trim() : '';
+
+        // Extract actual URLs from link cell
+        var urlMatches = link.match(/https?:\/\/[^\s,]+/g) || [];
+        var cleanLink  = urlMatches.join(', ');
+
+        // Use English content preferentially, fall back to Swedish
+        var question = enQ || svQ;
+        var answer   = enA || aiA || svA;
+
+        if (!question) return; // skip empty rows
+
+        var flat = {
+          _file:     filename,
+          _sheet:    sheetName,
+          _type:     'FAQ',
+          Category:  sheetName,
+          Question:  question,
+          Answer:    answer || '',
+          Question_SV: svQ,
+          Answer_SV:   svA
+        };
+        if (cleanLink) flat['Related Links'] = cleanLink;
+        newRows.push(flat);
+        added++;
       });
-      meta.sheets.push({name:sheetName,rowCount:added});
+      meta.sheets.push({ name: sheetName, rowCount: added });
+
     } else {
-      var dataRows=XLSX.utils.sheet_to_json(wb.Sheets[sheetName],{defval:''});
-      meta.sheets.push({name:sheetName,rowCount:dataRows.length});
-      dataRows.forEach(function(row){
-        var flat={_file:filename,_sheet:sheetName};
-        Object.keys(row).forEach(function(k){
-          var val=row[k];
-          if (val===null||val===undefined||val==='') return;
-          var strVal=String(val).trim();
-          if (strVal===''||strVal==='0') return;
-          flat[k.replace(/^Spec:\s*/i,'').trim()]=strVal;
+      // ── Regular product data sheet ──
+      var dataRows2 = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {defval:''});
+      meta.sheets.push({ name: sheetName, rowCount: dataRows2.length });
+      dataRows2.forEach(function(row) {
+        var flat = { _file: filename, _sheet: sheetName };
+        Object.keys(row).forEach(function(k) {
+          var val = row[k];
+          if (val === null || val === undefined || val === '') return;
+          var strVal = String(val).trim();
+          if (strVal === '' || strVal === '0') return;
+          var cleanKey = k.replace(/^Spec:\s*/i, '').trim();
+          flat[cleanKey] = strVal;
         });
-        if (Object.keys(flat).length>2) newRows.push(flat);
+        if (Object.keys(flat).length > 2) newRows.push(flat);
       });
     }
   });
-  window._kbFiles=window._kbFiles.filter(function(f){return f.name!==filename;});
+
+  // Replace any previous version of this file in local state
+  window._kbFiles = window._kbFiles.filter(function(f){ return f.name !== filename; });
   window._kbFiles.push(meta);
-  window._kbRows=window._kbRows.filter(function(r){return r._file!==filename;});
-  window._kbRows=window._kbRows.concat(newRows);
+  window._kbRows = window._kbRows.filter(function(r){ return r._file !== filename; });
+  window._kbRows = window._kbRows.concat(newRows);
 }
 
 function kbAfterAll(prog, bar) {
   bar.style.width = '100%';
-  try { localStorage.setItem('strands_kb_rows', JSON.stringify(window._kbRows)); } catch(e) {}
+
+  // 1. Save rows to localStorage (never goes to Firebase — too large)
+  try { localStorage.setItem('strands_kb_rows', JSON.stringify(window._kbRows)); } catch(e) {
+    console.warn('localStorage full — rows not persisted locally');
+  }
+
+  // 2. Push each file's metadata AND rows to Firebase so ALL users get the knowledge
   if (window._firebaseReady) {
     window._kbFiles.forEach(function(meta) {
       window._fbSet('strands/kb_files/' + kbSafeKey(meta.name), meta);
     });
+    // Sanitize row keys before writing — Firebase forbids . # $ / [ ] in keys
     var safeRows = window._kbRows.map(function(row) {
       var clean = {};
       Object.keys(row).forEach(function(k) {
@@ -1594,8 +1545,10 @@ function kbAfterAll(prog, bar) {
       });
       return clean;
     });
+    // Store rows in Firebase so every connected client can load them
     window._fbSet('strands/kb_rows', safeRows);
   }
+
   setTimeout(function(){
     prog.classList.remove('show'); bar.style.width = '0%';
     renderKB();
@@ -1607,63 +1560,88 @@ function renderKB() {
   var list     = document.getElementById('kbFileList');
   var clearBtn = document.getElementById('clearKbBtn');
   if (!list) return;
+
   if (!window._kbFiles.length) {
     list.innerHTML = '<div class="kb-empty">No files uploaded yet. Upload Excel or CSV files above to get started.</div>';
     if (clearBtn) clearBtn.style.display = 'none';
     return;
   }
+
   if (clearBtn) clearBtn.style.display = 'inline-block';
+
   var html = '';
   window._kbFiles.forEach(function(f) {
-    var totalRows = (f.sheets || []).reduce(function(a,s){ return a+(s.rowCount||0); }, 0);
-    var sheetTags = (f.sheets || []).map(function(s){
-      return '<span class="kb-sheet-tag">'+escHtml(s.name)+' ('+s.rowCount+' rows)</span>';
+    var totalRows  = (f.sheets || []).reduce(function(a,s){ return a + (s.rowCount||0); }, 0);
+    var sheetTags  = (f.sheets || []).map(function(s){
+      return '<span class="kb-sheet-tag">' + escHtml(s.name) + ' (' + s.rowCount + ' rows)</span>';
     }).join('');
-    var d       = new Date(f.uploadedAt);
-    var dateStr = isNaN(d.getTime()) ? '' : d.toLocaleDateString()+' '+d.toLocaleTimeString();
-    var icon    = /\.csv$/i.test(f.name||'') ? '📄' : '📊';
-    var safeJs  = JSON.stringify(f.name);
+    var d          = new Date(f.uploadedAt);
+    var dateStr    = isNaN(d.getTime()) ? '' : d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
+    var isCsv      = /\.csv$/i.test(f.name || '');
+    var icon       = isCsv ? '📄' : '📊';
+    var fileType   = isCsv ? 'CSV' : 'Excel';
+    var safeNameJs = JSON.stringify(f.name);
+
     html += '<div class="kb-file-item">'
-      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'
-      +'<div style="flex:1;min-width:0"><div class="kb-file-name">'+icon+' '+escHtml(f.name)+'</div>'
-      +'<div class="kb-file-meta">'+(f.sheets?f.sheets.length:0)+' sheet(s) &nbsp;·&nbsp; '+totalRows+' rows &nbsp;·&nbsp; '+dateStr+'</div></div>'
-      +'<button class="act-btn del" onclick="kbRemoveFile('+safeJs+')" style="flex-shrink:0">🗑 Remove</button>'
-      +'</div>'+(sheetTags?'<div class="kb-sheets" style="margin-top:8px">'+sheetTags+'</div>':'')+'</div>';
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'
+      +   '<div style="flex:1;min-width:0">'
+      +     '<div class="kb-file-name">' + icon + ' ' + escHtml(f.name) + '</div>'
+      +     '<div class="kb-file-meta">' + fileType + ' &nbsp;·&nbsp; '
+      +       (f.sheets ? f.sheets.length : 0) + ' sheet(s) &nbsp;·&nbsp; '
+      +       totalRows + ' rows &nbsp;·&nbsp; ' + dateStr
+      +     '</div>'
+      +   '</div>'
+      +   '<button class="act-btn del" onclick="kbRemoveFile(' + safeNameJs + ')" style="flex-shrink:0">🗑 Remove</button>'
+      + '</div>'
+      + (sheetTags ? '<div class="kb-sheets" style="margin-top:8px">' + sheetTags + '</div>' : '')
+      + '</div>';
   });
   list.innerHTML = html;
 }
 
 function kbRemoveFile(filename) {
-  if (!confirm('Remove "'+filename+'" from the knowledge base?\nThis removes it for everyone immediately.')) return;
+  if (!confirm('Remove "' + filename + '" from the knowledge base?\nThis removes it for everyone immediately.')) return;
+  // Ignore this file so the Firebase listener never adds it back
   if (!window._kbIgnore) window._kbIgnore = {};
   window._kbIgnore[filename] = true;
-  window._kbFiles = (window._kbFiles||[]).filter(function(f){ return f.name !== filename; });
-  window._kbMeta  = (window._kbMeta ||[]).filter(function(f){ return f.name !== filename; });
-  window._kbRows  = (window._kbRows ||[]).filter(function(r){ return r._file !== filename; });
+  // Wipe from local state
+  window._kbFiles = (window._kbFiles || []).filter(function(f){ return f.name !== filename; });
+  window._kbMeta  = (window._kbMeta  || []).filter(function(f){ return f.name !== filename; });
+  window._kbRows  = (window._kbRows  || []).filter(function(r){ return r._file !== filename; });
   try { localStorage.setItem('strands_kb_rows', JSON.stringify(window._kbRows)); } catch(e) {}
+  // Remove from Firebase the SAME way clearKnowledge does:
+  // wipe entire node then re-write remaining files
   if (window._firebaseReady) {
-    var rem     = (window._kbFiles||[]).slice();
-    var remRows = (window._kbRows ||[]).slice();
-    window._fbRemove('strands/kb_files/'+kbSafeKey(filename)).then(function(){
-      return window._fbSet('strands/kb_rows', remRows);
-    }).then(function(){
-      setTimeout(function(){ if(window._kbIgnore) delete window._kbIgnore[filename]; }, 5000);
+    var remaining = (window._kbFiles || []).slice();
+    var remainingRows = (window._kbRows || []).slice();
+    window._fbRemove('strands/kb_files').then(function(){
+      remaining.forEach(function(meta){
+        window._fbSet('strands/kb_files/' + kbSafeKey(meta.name), meta);
+      });
+      // Re-write remaining rows so other users lose the deleted file's data too
+      window._fbSet('strands/kb_rows', remainingRows);
+      setTimeout(function(){ window._kbIgnore = {}; }, 2000);
     });
   }
   renderKB();
   updateStats();
 }
 
+// Keep old name as alias so nothing else breaks
 function removeKBFile(name) { kbRemoveFile(name); }
 
 function clearKnowledge() {
   if (!confirm('Clear ALL knowledge base files?\nThis removes them for everyone immediately.')) return;
   if (!window._kbIgnore) window._kbIgnore = {};
-  (window._kbFiles||[]).forEach(function(f){ window._kbIgnore[f.name]=true; });
-  window._kbFiles=[]; window._kbMeta=[]; window._kbRows=[];
+  (window._kbFiles || []).forEach(function(f){ window._kbIgnore[f.name] = true; });
+  window._kbFiles = [];
+  window._kbMeta  = [];
+  window._kbRows  = [];
   try { localStorage.removeItem('strands_kb_rows'); } catch(e) {}
   if (window._firebaseReady) {
-    window._fbRemove('strands/kb_files').then(function(){ setTimeout(function(){ window._kbIgnore={}; },2000); });
+    window._fbRemove('strands/kb_files').then(function(){
+      setTimeout(function(){ window._kbIgnore = {}; }, 2000);
+    });
     window._fbRemove('strands/kb_rows');
   }
   renderKB();
@@ -1671,89 +1649,585 @@ function clearKnowledge() {
 }
 
 // ============================================================
-//  SIMPLE SEARCH — finds relevant rows from Excel data
+//  NLU SEARCH ENGINE
 // ============================================================
+
+// Stopwords (EN + SV) — removed before scoring to reduce noise
+var STOPWORDS = new Set([
+  'the','a','an','is','are','was','were','be','been','being','have','has','had',
+  'do','does','did','will','would','could','should','may','might','shall','can',
+  'to','of','in','on','at','for','with','by','from','about','as','into','through',
+  'and','or','but','not','no','nor','so','yet','both','either','neither','each',
+  'i','me','my','we','our','you','your','it','its','they','their','them','this',
+  'that','these','those','what','which','who','how','when','where','why',
+  'please','help','tell','need','want','know','get','give','find','show','look',
+  // Swedish
+  'och','att','det','en','ett','av','på','är','för','med','som','till','kan',
+  'har','om','inte','vara','men','från','vi','de','dem','den','han','hon','jag',
+  'du','ni','vad','hur','när','var','vem','vilket','vilken','vilka','eller',
+  'ja','nej','tack','snälla','hjälp','hitta','visa','ge','få','vill','behöver'
+]);
+
+// Synonym map — query words get expanded before scoring
+var SYNONYMS = {
+  'return':'refund exchange send back return',
+  'refund':'refund return money back payment',
+  'exchange':'exchange swap return replace',
+  'shipping':'shipping delivery ship send dispatch',
+  'delivery':'delivery shipping ship dispatch arrive',
+  'track':'track tracking status order where',
+  'order':'order purchase buy bought',
+  'price':'price cost how much fee charge',
+  'size':'size sizing fit measurement dimension',
+  'color':'color colour shade',
+  'product':'product item article goods',
+  'contact':'contact support reach help email phone',
+  'warranty':'warranty guarantee repair fix broken',
+  'payment':'payment pay checkout purchase',
+  'cancel':'cancel cancellation stop',
+  'discount':'discount offer sale promo coupon code',
+  'account':'account profile login password',
+  'quality':'quality material fabric made of',
+  // Wire & connector domain synonyms
+  'wire':'wire cable conductor strand flex',
+  'cable':'cable wire flex lead cord',
+  'connector':'connector plug socket terminal crimp',
+  'crimp':'crimp terminal connector ferrule',
+  'gauge':'gauge awg mm2 size thickness diameter cross-section',
+  'voltage':'voltage volt v rating',
+  'current':'current ampere amp rating capacity',
+  'insulation':'insulation sleeve jacket coating pvc',
+  'waterproof':'waterproof ip68 ip67 sealed weather resistant',
+  'heat':'heat resistant high temperature thermal',
+  'flex':'flex flexible stranded multistrand',
+  // Swedish wire synonyms
+  'kabel':'kabel ledning wire kopparkabel',
+  'kontakt':'kontakt plugg uttag koppling',
+  'ledning':'ledning kabel wire tråd',
+  'frakt':'frakt leverans skicka',
+  'leverans':'leverans frakt spåra',
+  'spåra':'spåra spårning status',
+  'betalning':'betalning betala kostnad',
+  'storlek':'storlek måttguide mått'
+};
+
+// Simple porter-like stemmer (handles common English/Swedish suffixes)
+function stem(word) {
+  word = word.toLowerCase();
+  // English
+  word = word.replace(/ational$/, 'ate').replace(/tional$/, 'tion')
+             .replace(/enci$/, 'ence').replace(/anci$/, 'ance')
+             .replace(/izer$/, 'ize').replace(/ising$/, 'ise')
+             .replace(/izing$/, 'ize').replace(/ised$/, 'ise')
+             .replace(/ized$/, 'ize').replace(/ational$/, 'ate')
+             .replace(/fulness$/, 'ful').replace(/ousness$/, 'ous')
+             .replace(/iveness$/, 'ive').replace(/isation$/, 'ise')
+             .replace(/ization$/, 'ize').replace(/ation$/, 'ate')
+             .replace(/ating$/, 'ate').replace(/nesses$/, '')
+             .replace(/ments$/, '').replace(/ment$/, '')
+             .replace(/ings$/, '').replace(/ing$/, '')
+             .replace(/tion$/, 'te').replace(/sion$/, 'se')
+             .replace(/ers$/, '').replace(/er$/, '')
+             .replace(/ies$/, 'y').replace(/ied$/, 'y')
+             .replace(/ness$/, '').replace(/ful$/, '')
+             .replace(/less$/, '').replace(/ous$/, '')
+             .replace(/ive$/, '').replace(/able$/, '')
+             .replace(/ible$/, '').replace(/ance$/, '')
+             .replace(/ence$/, '').replace(/ly$/, '')
+             .replace(/ies$/, 'i').replace(/ied$/, 'i')
+             .replace(/s$/, '');
+  // Swedish common suffixes
+  word = word.replace(/ningar$/, '').replace(/ning$/, '')
+             .replace(/elser$/, '').replace(/else$/, '')
+             .replace(/ande$/, '').replace(/ande$/, '')
+             .replace(/arnas$/, '').replace(/ernas$/, '')
+             .replace(/ornas$/, '').replace(/arens$/, '')
+             .replace(/arens$/, '').replace(/ernas$/, '')
+             .replace(/arna$/, '').replace(/erna$/, '')
+             .replace(/orna$/, '').replace(/aren$/, '')
+             .replace(/aren$/, '').replace(/ades$/, '')
+             .replace(/ades$/, '').replace(/ats$/, '')
+             .replace(/ade$/, '').replace(/are$/, '')
+             .replace(/iga$/, '').replace(/igt$/, '')
+             .replace(/iga$/, '').replace(/ar$/, '')
+             .replace(/er$/, '').replace(/as$/, '')
+             .replace(/es$/, '').replace(/at$/, '')
+             .replace(/en$/, '').replace(/an$/, '')
+             .replace(/ns$/, '').replace(/rs$/, '')
+             .replace(/ts$/, '').replace(/s$/, '');
+  return word.length > 2 ? word : word; // keep short stems
+}
+
+// Levenshtein distance for fuzzy matching (max distance 2 for short words, 3 for long)
+function levenshtein(a, b) {
+  if (Math.abs(a.length - b.length) > 3) return 99;
+  var dp = Array.from({length: a.length+1}, function(_, i) {
+    return Array.from({length: b.length+1}, function(_, j) { return i===0?j:j===0?i:0; });
+  });
+  for (var i=1; i<=a.length; i++) {
+    for (var j=1; j<=b.length; j++) {
+      dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1]
+        : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+// Tokenize: lowercase, remove punctuation, split, remove stopwords, apply stemming
+function tokenize(text) {
+  return text.toLowerCase()
+    .replace(/[^\w\s\u00C0-\u024F]/g, ' ')
+    .split(/\s+/)
+    .filter(function(w){ return w.length > 1 && !STOPWORDS.has(w); })
+    .map(stem);
+}
+
+// Expand query with synonyms
+function expandQuery(raw) {
+  var words = raw.toLowerCase().split(/\s+/);
+  var expanded = [];
+  words.forEach(function(w) {
+    expanded.push(w);
+    if (SYNONYMS[w]) expanded = expanded.concat(SYNONYMS[w].split(' '));
+    // Also try stem match in synonyms
+    var ws = stem(w);
+    Object.keys(SYNONYMS).forEach(function(key) {
+      if (stem(key) === ws) expanded = expanded.concat(SYNONYMS[key].split(' '));
+    });
+  });
+  return Array.from(new Set(expanded));
+}
+
+// Score a row against query tokens with multiple signals
+function scoreRow(rowText, rowTokens, queryTokens, queryRaw, expandedWords) {
+  var score = 0;
+  var rowLow = rowText.toLowerCase();
+
+  // 1. Exact phrase match (highest weight)
+  if (rowLow.includes(queryRaw.toLowerCase())) score += 20;
+
+  // 2. Exact token match (stemmed)
+  queryTokens.forEach(function(qt) {
+    rowTokens.forEach(function(rt) {
+      if (rt === qt) score += 5;
+      else if (rt.startsWith(qt) || qt.startsWith(rt)) score += 3; // prefix match
+    });
+  });
+
+  // 3. Expanded synonym tokens
+  expandedWords.forEach(function(ew) {
+    var ewStem = stem(ew);
+    rowTokens.forEach(function(rt) {
+      if (rt === ewStem) score += 2;
+    });
+  });
+
+  // 4. Fuzzy match for longer words (catches typos like "shiping" → "shipping")
+  queryTokens.forEach(function(qt) {
+    if (qt.length >= 4) {
+      rowTokens.forEach(function(rt) {
+        if (rt.length >= 4) {
+          var dist = levenshtein(qt, rt);
+          var maxDist = qt.length >= 7 ? 2 : 1;
+          if (dist <= maxDist && dist > 0) score += (2 - dist); // fuzzy bonus
+        }
+      });
+    }
+  });
+
+  // 5. Word-in-text substring (catches partial matches not caught by tokenizer)
+  queryTokens.forEach(function(qt) {
+    if (qt.length >= 3 && rowLow.includes(qt)) score += 1;
+  });
+
+  return score;
+}
+
+function offlineSearch(query) {
+  if (!knowledgeRows.length) return null;
+  var queryRaw = query.trim();
+  if (!queryRaw) return null;
+
+  var queryTokens   = tokenize(queryRaw);
+  var expandedWords = expandQuery(queryRaw);
+  var expandedTokens = tokenize(expandedWords.join(' '));
+  var allQueryTokens = Array.from(new Set(queryTokens.concat(expandedTokens)));
+
+  if (!allQueryTokens.length && queryRaw.length < 2) return null;
+
+  var scored = knowledgeRows.map(function(row) {
+    var dataKeys = Object.keys(row).filter(function(k){ return k !== '_file' && k !== '_sheet'; });
+    var rowText  = dataKeys.map(function(k){ return row[k]; }).join(' ');
+    var rowTokens = tokenize(rowText);
+    var s = scoreRow(rowText, rowTokens, allQueryTokens, queryRaw, expandedWords);
+    return { row: row, score: s, rowText: rowText };
+  }).filter(function(x){ return x.score > 0; });
+
+  if (!scored.length) return null;
+  scored.sort(function(a, b){ return b.score - a.score; });
+
+  // Take top 3 results if their scores are within 60% of the top score
+  var topScore = scored[0].score;
+  var results  = scored.filter(function(x){ return x.score >= topScore * 0.6; }).slice(0, 3).map(function(x){ return x.row; });
+
+  return formatSearchResults(results, queryRaw);
+}
+
+function formatSearchResults(rows, queryRaw) {
+  var parts = [];
+
+  rows.forEach(function(row, idx) {
+    var cols = Object.keys(row).filter(function(k){ return k !== '_file' && k !== '_sheet'; });
+
+    // Identify column roles by name pattern
+    var titleCol   = cols.find(function(k){ return /^(title|name|subject|topic|question|heading|product)/i.test(k); });
+    var answerCols = cols.filter(function(k){ return /^(answer|description|details|info|text|content|body|reply|response|summary)/i.test(k); });
+    var urlCol     = cols.find(function(k){ return /^(url|link|href|web|page|source)/i.test(k); });
+
+    // If no recognized columns, use all non-empty columns
+    var useCols = (titleCol || answerCols.length || urlCol) ? null : cols;
+
+    var html = '';
+
+    // Title
+    var title = titleCol && row[titleCol] ? row[titleCol].trim() : '';
+    if (title) html += '<b>' + escHtml(title) + '</b><br>';
+
+    // Answer / description — use first matching col, trim to 400 chars
+    var answered = false;
+    answerCols.forEach(function(k) {
+      if (!answered && row[k] && row[k].trim()) {
+        var text = row[k].trim();
+        if (text.length > 400) text = text.substring(0, 400) + '…';
+        html += linkify(escHtml(text)) + '<br>';
+        answered = true;
+      }
+    });
+
+    // If no answer column, show all columns as key: value
+    if (useCols) {
+      useCols.forEach(function(k) {
+        if (row[k] && row[k].trim()) {
+          var val = row[k].trim();
+          if (val.length > 300) val = val.substring(0, 300) + '…';
+          html += '<b>' + escHtml(k) + ':</b> ' + linkify(escHtml(val)) + '<br>';
+        }
+      });
+    }
+
+    // URL link
+    if (urlCol && row[urlCol] && row[urlCol].trim()) {
+      html += '🔗 <a href="' + escHtml(row[urlCol].trim()) + '" target="_blank" style="color:var(--acc)">' + escHtml(row[urlCol].trim()) + '</a><br>';
+    } else {
+      // Auto-detect URLs inside any column value
+      cols.forEach(function(k) {
+        if (k === titleCol || answerCols.indexOf(k) !== -1) return;
+        var v = row[k] ? row[k].trim() : '';
+        if (/^https?:\/\//i.test(v)) {
+          html += '🔗 <a href="' + escHtml(v) + '" target="_blank" style="color:var(--acc)">' + escHtml(v) + '</a><br>';
+        }
+      });
+    }
+
+    if (!html) return;
+
+    if (idx > 0) parts.push('<hr style="border:none;border-top:1px solid var(--brd);margin:10px 0">');
+    parts.push(html + '<small style="color:var(--txd)">📊 ' + escHtml(row._file || '') + '</small>');
+  });
+
+  return parts.length ? parts.join('') : null;
+}
+
+// Build knowledge context for AI — smart scoring tuned for Strands product data
+// ============================================================
+//  INTENT DETECTION + SMART RETRIEVAL
+// ============================================================
+// Maps casual user language to real category paths and product types
+var INTENT_MAP = {
+  // ── Product type keywords ──
+  'led bar':       { cats: ['LED Bars'], types: ['led bar','light bar'] },
+  'led bars':      { cats: ['LED Bars'], types: ['led bar','light bar'] },
+  'lightbar':      { cats: ['LED Bars'], types: ['led bar','light bar'] },
+  'light bar':     { cats: ['LED Bars'], types: ['led bar','light bar'] },
+  'driving light': { cats: ['Driving lights'], types: ['driving','dark knight','nuuk'] },
+  'driving lights':{ cats: ['Driving lights'], types: ['driving','dark knight','nuuk'] },
+  'work light':    { cats: ['Work lights'], types: ['work light','worklight'] },
+  'work lights':   { cats: ['Work lights'], types: ['work light','worklight'] },
+  'warning light': { cats: ['Warning lights'], types: ['warning','strobe','beacon'] },
+  'position light':{ cats: ['Position lights'], types: ['position','marker','reflector'] },
+  'tail light':    { cats: ['Tail lights'], types: ['tail','rear'] },
+  'fog light':     { cats: ['Driving lights'], types: ['fog'] },
+
+  // ── Vehicle keywords → inspirational categories ──
+  'motorcycle':    { vehicle: 'MC - ATV - UTV' },
+  'mc':            { vehicle: 'MC - ATV - UTV' },
+  'atv':           { vehicle: 'MC - ATV - UTV' },
+  'utv':           { vehicle: 'MC - ATV - UTV' },
+  'truck':         { vehicle: 'Trucks' },
+  'trucks':        { vehicle: 'Trucks' },
+  'tractor':       { vehicle: 'Agriculture' },
+  'agriculture':   { vehicle: 'Agriculture' },
+  'farm':          { vehicle: 'Agriculture' },
+  'car':           { vehicle: 'Cars' },
+  '4x4':          { vehicle: '4X4 - camper' },
+  'offroad':       { vehicle: '4X4 - camper' },
+  'off-road':      { vehicle: '4X4 - camper' },
+  'off road':      { vehicle: '4X4 - camper' },
+  'camper':        { vehicle: '4X4 - camper' },
+  'van':           { vehicle: 'Light commercial vehicle' },
+  'lcv':           { vehicle: 'Light commercial vehicle' },
+  'heavy':         { vehicle: 'Off highway - heavy duty' },
+  'excavator':     { vehicle: 'Off highway - heavy duty' },
+  'construction':  { vehicle: 'Off highway - heavy duty' },
+
+  // ── Attribute/feature keywords ──
+  'waterproof':    { attr: 'ip', attrVals: ['IP67','IP68','IP69','IP66/68','IP68/69K','IP67/69K'] },
+  'ip69':          { attr: 'ip', attrVals: ['IP69','IP68/69K','IP67/69K'] },
+  'ip68':          { attr: 'ip', attrVals: ['IP68','IP68/69K'] },
+  'brightest':     { sortBy: 'lumen', sortDir: 'desc' },
+  'highest lumen': { sortBy: 'lumen', sortDir: 'desc' },
+  'most lumen':    { sortBy: 'lumen', sortDir: 'desc' },
+  'best lumen':    { sortBy: 'lumen', sortDir: 'desc' },
+  'approved':      { attr: 'eapproved', attrVals: ['Yes'] },
+  'e-approved':    { attr: 'eapproved', attrVals: ['Yes'] },
+  'ece approved':  { attr: 'eapproved', attrVals: ['Yes'] }
+};
+
+// Detect intent type from query
+function detectIntent(q) {
+  var ql = q.toLowerCase();
+  var intent = {
+    type: 'lookup',
+    cats: [],
+    vehicle: null,
+    sortBy: null,
+    sortDir: null,
+    attrFilter: null,
+    skus: []
+  };
+
+  // Extract SKUs first — 4+ digit numbers or alphanumeric SKU patterns like 07-001
+  var skuMatches = ql.match(/\b[a-z0-9]{2,}-[a-z0-9]+\b|\b\d{4,}\b/g) || [];
+  intent.skus = skuMatches;
+
+  // ── If query contains a SKU → ALWAYS lookup, never override with intent ──
+  // This is the most important rule — specific product queries must never get category-filtered
+  if (intent.skus.length > 0) {
+    intent.type = 'lookup';
+    return intent; // return immediately, no further intent detection needed
+  }
+
+  // Only run intent detection when NO specific SKU is in the query
+  // Tightened recommend words — avoid false matches on "what is", "which sku", "good morning" etc
+  var isRecommend = /\b(suggest|recommend|best light|top light|show me|give me options|what.*should|which.*light.*best|best.*light|best.*bar|best.*work|best.*warning|best.*position|best.*tail|best.*driving|what.*lights.*do you|do you have any|i want to see|i need a light)\b/i.test(ql);
+
+  var isCompare = /\b(compare|vs\.?|versus|difference between|better than|between)\b/i.test(ql);
+
+  var isFilter = /\b(highest|lowest|most lumen|brightest|list all|show all|filter|all.*with|which.*have|which.*has)\b/i.test(ql);
+
+  // Check all intent keywords
+  Object.keys(INTENT_MAP).forEach(function(kw) {
+    if (ql.indexOf(kw) !== -1) {
+      var m = INTENT_MAP[kw];
+      if (m.cats)   intent.cats = intent.cats.concat(m.cats);
+      if (m.vehicle && !intent.vehicle) intent.vehicle = m.vehicle;
+      if (m.sortBy) { intent.sortBy = m.sortBy; intent.sortDir = m.sortDir; }
+      if (m.attr)   intent.attrFilter = m;
+    }
+  });
+
+  // Set intent type — order matters
+  if (isCompare) {
+    intent.type = 'compare';
+  } else if (intent.sortBy || isFilter) {
+    intent.type = 'filter';
+  } else if (intent.vehicle && isRecommend) {
+    intent.type = 'fitcheck';
+  } else if (isRecommend && intent.cats.length > 0) {
+    intent.type = 'recommend';
+  } else if (intent.vehicle) {
+    intent.type = 'fitcheck';
+  } else if (intent.cats.length > 0) {
+    intent.type = 'recommend';
+  }
+  // default stays 'lookup' which falls through to keyword scoring
+
+  return intent;
+}
+
+// Get rows matching intent — smart category + attribute filtering
+function getRowsByIntent(intent, allRows) {
+  var matched = [];
+
+  // ── LOOKUP: find by SKU ──
+  if (intent.type === 'lookup' && intent.skus.length > 0) {
+    matched = allRows.filter(function(row) {
+      var sku = String(row['sku'] || row['SKU'] || '');
+      return intent.skus.some(function(s){ return sku.indexOf(s) !== -1; });
+    });
+    if (matched.length > 0) return matched.slice(0,5);
+  }
+
+  // ── COMPARE: get exactly those SKUs ──
+  if (intent.type === 'compare') {
+    matched = allRows.filter(function(row) {
+      var sku = String(row['sku'] || row['SKU'] || '');
+      return intent.skus.some(function(s){ return sku.indexOf(s) !== -1; });
+    });
+    return matched.slice(0,5);
+  }
+
+  // ── Filter by category ──
+  var pool = allRows;
+  if (intent.cats.length > 0) {
+    pool = allRows.filter(function(row) {
+      var cats = String(row['categories'] || row['Categories'] || '').toLowerCase();
+      return intent.cats.some(function(c){ return cats.indexOf(c.toLowerCase()) !== -1; });
+    });
+  }
+
+  // ── Filter by vehicle ──
+  if (intent.vehicle) {
+    var byVehicle = pool.filter(function(row) {
+      var cats = String(row['categories'] || row['Categories'] || '');
+      return cats.indexOf(intent.vehicle) !== -1;
+    });
+    if (byVehicle.length > 0) pool = byVehicle;
+  }
+
+  // ── Filter by attribute ──
+  if (intent.attrFilter) {
+    var attrPool = pool.filter(function(row) {
+      var ip = String(row['spec_ip-class'] || row['IP-class'] || row['IP'] || '');
+      var ea = String(row['spec_e-approved'] || row['E-approved'] || '');
+      if (intent.attrFilter.attr === 'ip') {
+        return intent.attrFilter.attrVals.some(function(v){ return ip.indexOf(v.replace('IP','')) !== -1; });
+      }
+      if (intent.attrFilter.attr === 'eapproved') {
+        return ea.toLowerCase() === 'yes';
+      }
+      return true;
+    });
+    if (attrPool.length > 0) pool = attrPool;
+  }
+
+  // ── Sort by lumen for filter/recommend ──
+  if (intent.sortBy === 'lumen') {
+    pool = pool.slice().sort(function(a,b) {
+      var la = parseFloat(a['spec_actual-lumen-lm'] || a['spec_theoretical-lumen-lm'] || 0) || 0;
+      var lb = parseFloat(b['spec_actual-lumen-lm'] || b['spec_theoretical-lumen-lm'] || 0) || 0;
+      return intent.sortDir === 'desc' ? lb - la : la - lb;
+    });
+    // Only return products that actually have lumen data
+    pool = pool.filter(function(r){
+      return parseFloat(r['spec_actual-lumen-lm'] || r['spec_theoretical-lumen-lm'] || 0) > 0;
+    });
+  }
+
+  // ── Only return published, non-discontinued products ──
+  pool = pool.filter(function(r){
+    var status = String(r['status'] || '').toLowerCase();
+    var disc   = String(r['discontinued'] || '').toLowerCase();
+    return status !== 'draft' && disc !== 'yes' && disc !== '1';
+  });
+
+  return pool.slice(0, 10);
+}
+
+// Build AI instruction based on intent type
+function buildIntentInstruction(intent, matchedCount) {
+  var instr = '\n\nINTENT INSTRUCTION: ';
+  switch(intent.type) {
+    case 'recommend':
+      instr += 'The user is asking for a RECOMMENDATION. You have been given the ' + matchedCount + ' most relevant products. Compare them based on lumen output, IP rating, E-approval, and features. Recommend the best 1-3 options with clear reasons why. Mention the SKU and product name for each recommendation.';
+      break;
+    case 'fitcheck':
+      instr += 'The user wants to know which products suit a specific VEHICLE TYPE (' + (intent.vehicle||'unknown') + '). From the products provided, recommend the most suitable ones for that vehicle. Consider size, voltage, mounting, and any vehicle-specific certifications. Mention SKU and name.';
+      break;
+    case 'filter':
+      instr += 'The user is asking to FILTER or RANK products by an attribute. Present the top results clearly ranked. For lumen queries, show actual lumen values. Always show SKU and product name.';
+      break;
+    case 'compare':
+      instr += 'The user wants to COMPARE specific products. Present a clear side-by-side comparison of the key specs: lumen, IP rating, voltage, weight, E-approval, warranty, price. Give a clear recommendation at the end.';
+      break;
+    default:
+      instr += 'Look up the specific product or answer the specific question from the database provided.';
+  }
+  return instr;
+}
+
 function buildKBContext(query) {
   if (!knowledgeRows.length) return '';
-
-  var q   = (query || '').toLowerCase().trim();
   var MAX = 14000;
-
-  // Split into tokens — any word 2+ chars
+  var q = (query || '').toLowerCase().trim();
   var tokens  = q.split(/\s+/).filter(function(t){ return t.length > 1; });
   var numbers = q.match(/\d+/g) || [];
 
   var faqRows  = knowledgeRows.filter(function(r){ return r['_type'] === 'FAQ'; });
   var prodRows = knowledgeRows.filter(function(r){ return r['_type'] !== 'FAQ'; });
 
-  // Score a row — simple, reliable, no magic
-  function score(row) {
+  function scoreRow(row) {
     var s = 0;
-    // Build full text from ALL columns
     var allText = Object.keys(row)
       .filter(function(k){ return k !== '_file' && k !== '_sheet' && k !== '_type'; })
       .map(function(k){ return String(row[k] || ''); })
       .join(' ').toLowerCase();
-
     var sku  = String(row['sku']  || row['SKU']  || '').toLowerCase();
     var name = String(row['name'] || row['Name'] || '').toLowerCase();
-    var qsv  = String(row['Question'] || '').toLowerCase();
-    var ans  = String(row['Answer']   || '').toLowerCase();
-
-    // SKU match — highest priority
+    var faqQ = String(row['Question'] || '').toLowerCase();
+    var faqA = String(row['Answer']   || '').toLowerCase();
     numbers.forEach(function(n) {
-      if (sku === n)               s += 100;
-      else if (sku.indexOf(n) !== -1) s += 60;
-      if (allText.indexOf(n) !== -1)  s += 5;
+      if (sku === n)                    s += 100;
+      else if (sku.indexOf(n) !== -1)   s += 60;
+      if (allText.indexOf(n) !== -1)    s += 5;
     });
     tokens.forEach(function(t) {
-      if (sku === t)                   s += 100;
-      if (name.indexOf(t) !== -1)      s += 30;
-      if (qsv.indexOf(t)  !== -1)      s += 25;
-      if (ans.indexOf(t)  !== -1)      s += 8;
-      if (allText.indexOf(t) !== -1)   s += 3;
+      if (sku === t)                    s += 100;
+      if (name.indexOf(t) !== -1)       s += 30;
+      if (faqQ.indexOf(t) !== -1)       s += 25;
+      if (faqA.indexOf(t) !== -1)       s += 8;
+      if (allText.indexOf(t) !== -1)    s += 3;
     });
     return s;
   }
 
-  // Score and sort all rows
-  var scoredFAQ  = faqRows.map(function(r){ return {r:r, s:score(r)}; })
+  var topFAQ = faqRows
+    .map(function(r){ return {r:r, s:scoreRow(r)}; })
     .filter(function(x){ return x.s > 0; })
     .sort(function(a,b){ return b.s - a.s; })
-    .slice(0, 5);
+    .slice(0, 5).map(function(x){ return x.r; });
 
-  var scoredProd = prodRows.map(function(r){ return {r:r, s:score(r)}; })
+  var topProd = prodRows
+    .map(function(r){ return {r:r, s:scoreRow(r)}; })
     .filter(function(x){ return x.s > 0; })
     .sort(function(a,b){ return b.s - a.s; })
-    .slice(0, 10);
+    .slice(0, 10).map(function(x){ return x.r; });
 
-  if (!scoredFAQ.length && !scoredProd.length) return '';
+  if (!topFAQ.length && !topProd.length) return '';
 
-  // Useful product columns to send to AI
   var COLS = ['sku','name','short_description','categories','spec_functions',
     'spec_theoretical-lumen-lm','spec_actual-lumen-lm','spec_voltage-dc-v-dc',
     'spec_ip-class','spec_e-approved','spec_weight-kg','spec_beam-angle',
     'spec_color-housing','spec_warranty-years','spec_color-lens',
     'discontinued','manual','product_sheet','youtube_videos','beam_pattern'];
 
-  var out = '';
-  var chars = 0;
+  var out = ''; var chars = 0;
 
-  if (scoredFAQ.length) {
-    out += '=== FAQ (' + scoredFAQ.length + ' matches — use these answers exactly) ===\n';
-    scoredFAQ.forEach(function(x) {
-      var cols = Object.keys(x.r).filter(function(k){ return k !== '_file' && k !== '_sheet' && k !== '_type'; });
-      var line = cols.map(function(k){ return k+': '+x.r[k]; }).join(' | ') + '\n';
+  if (topFAQ.length) {
+    out += '=== FAQ (' + topFAQ.length + ' matches — use these answers exactly) ===\n';
+    topFAQ.forEach(function(r) {
+      var cols = Object.keys(r).filter(function(k){ return k !== '_file' && k !== '_sheet' && k !== '_type'; });
+      var line = cols.map(function(k){ return k+': '+r[k]; }).join(' | ') + '\n';
       if (chars + line.length < MAX) { out += line; chars += line.length; }
     });
     out += '\n';
   }
 
-  if (scoredProd.length) {
-    out += '=== PRODUCTS (' + scoredProd.length + ' matches) ===\n';
-    scoredProd.forEach(function(x) {
-      var cols = Object.keys(x.r).filter(function(k){ return COLS.indexOf(k) !== -1 && x.r[k] && String(x.r[k]).trim(); });
-      var line = cols.map(function(k){ return k+': '+x.r[k]; }).join(' | ') + '\n';
+  if (topProd.length) {
+    out += '=== PRODUCTS (' + topProd.length + ' matches) ===\n';
+    topProd.forEach(function(r) {
+      var cols = Object.keys(r).filter(function(k){ return COLS.indexOf(k) !== -1 && r[k] && String(r[k]).trim(); });
+      var line = cols.map(function(k){ return k+': '+r[k]; }).join(' | ') + '\n';
       if (chars + line.length < MAX) { out += line; chars += line.length; }
     });
   }
@@ -1766,10 +2240,11 @@ function sendMsg() {
   var inp = document.getElementById('chatInput');
   var q = inp.value.trim();
   if (!q || !currentUser) return;
-  resetSessionTimer();
+  resetSessionTimer(); // reset inactivity timer on every message
   var btn = document.getElementById('sendBtn');
   inp.value = '';
   btn.disabled = true;
+  // Language is always auto-detected from what the user types — no manual selector
   appendMsg('user', q);
   showTyping();
   setTimeout(function() { processQuery(q, null); }, 300);
@@ -1779,6 +2254,7 @@ function appendMsg(role, html, mode) {
   var msgs = document.getElementById('msgs');
   var welcome = msgs.querySelector('.welcome-msg');
   if (welcome) welcome.remove();
+
   var div = document.createElement('div');
   div.className = 'msg ' + role;
   var avatarChar = role==='user' ? (currentUser?currentUser.username[0].toUpperCase():'U') : '⚡';
@@ -1804,49 +2280,42 @@ function showTyping() {
 function removeTyping() { if(typingEl){typingEl.remove();typingEl=null;} }
 
 function detectLang(text) {
+  // Detect language from characters and common words — supports 8 languages
   var t = text.toLowerCase();
-  var svChars = (text.match(/[åäöÅÄÖ]/g)||[]).length;
-  var words   = t.replace(/[^a-zåäöüéàèáóíñ\s]/gi,' ').split(/\s+/).filter(Boolean);
-  var svWords = ['och','att','det','är','för','med','som','till','kan','har','om','inte','men','från','vad','hur','när','var','tack','ja','nej','vill','finns','pris','ljus','bil','lampa'];
-  if (svChars >= 1 || words.filter(function(w){ return svWords.indexOf(w)!==-1; }).length >= 1) return 'sv';
-  var deChars = (text.match(/[üöäÜÖÄß]/g)||[]).length;
-  var deWords = ['und','die','der','das','ist','ich','nicht','mit','für','auf','ein','eine'];
-  if (deChars >= 2 || words.filter(function(w){ return deWords.indexOf(w)!==-1; }).length >= 2) return 'de';
-  var frChars = (text.match(/[éèêëàâùûîïœç]/g)||[]).length;
-  var frWords = ['est','les','des','une','pour','pas','avec','vous','bonjour','merci'];
-  if (frChars >= 2 || words.filter(function(w){ return frWords.indexOf(w)!==-1; }).length >= 2) return 'fr';
-  var esWords = ['que','con','para','una','como','más','pero','por','hay','hola','gracias'];
-  if ((text.match(/[áéíóúüñ¿¡]/g)||[]).length >= 2 || words.filter(function(w){ return esWords.indexOf(w)!==-1; }).length >= 2) return 'es';
-  if (/[\u0600-\u06FF]/.test(text)) return 'ar';
-  if (/[\u4E00-\u9FFF]/.test(text)) return 'zh';
-  return 'en';
-}
 
-function offlineSearch(query) {
-  if (!knowledgeRows.length) return null;
-  var q = (query||'').toLowerCase().trim();
-  if (!q) return null;
-  var tokens  = q.split(/\s+/).filter(function(t){ return t.length > 1; });
-  var numbers = q.match(/\d+/g) || [];
-  var scored  = knowledgeRows.map(function(row) {
-    var s = 0;
-    var allText = Object.keys(row).filter(function(k){ return k!=='_file'&&k!=='_sheet'&&k!=='_type'; })
-      .map(function(k){ return String(row[k]||''); }).join(' ').toLowerCase();
-    var sku  = String(row['sku']||row['SKU']||'').toLowerCase();
-    var name = String(row['name']||row['Name']||'').toLowerCase();
-    numbers.forEach(function(n){ if(sku.indexOf(n)!==-1) s+=50; if(allText.indexOf(n)!==-1) s+=5; });
-    tokens.forEach(function(t){ if(name.indexOf(t)!==-1) s+=20; if(allText.indexOf(t)!==-1) s+=3; });
-    return { row:row, score:s };
-  }).filter(function(x){ return x.score>0; }).sort(function(a,b){ return b.score-a.score; });
-  if (!scored.length) return null;
-  var top = scored.slice(0,3);
-  return top.map(function(x){
-    var r = x.row;
-    var name = r['name']||r['Name']||'';
-    var sku  = r['sku'] ||r['SKU'] ||'';
-    var desc = r['short_description']||r['Answer']||'';
-    return '<b>'+(name||sku)+'</b>'+(sku&&name?' ('+sku+')':'')+(desc?'<br>'+escHtml(String(desc).substring(0,200)):'');
-  }).join('<hr style="border-color:var(--brd);margin:8px 0">');
+  // Swedish — å ä ö characters or common words
+  var svChars = (text.match(/[åäöÅÄÖ]/g) || []).length;
+  var svWords = ['och','att','det','är','för','med','som','till','kan','har','om','inte','men','från','vad','hur','när','var','vilken','vilket','tack','ja','nej','vill','finns','pris','ljus','bil','lampa'];
+  var words   = t.replace(/[^a-zåäöüéàèáóíñ\s]/gi,' ').split(/\s+/).filter(Boolean);
+  var svCount = words.filter(function(w){ return svWords.indexOf(w)!==-1; }).length;
+  if (svChars >= 1 || svCount >= 1) return 'sv';
+
+  // German — ü ö ä ß or common words
+  var deChars = (text.match(/[üöäÜÖÄß]/g) || []).length;
+  var deWords = ['und','die','der','das','ist','ich','nicht','mit','für','auf','ein','eine','haben','kann','wie','was'];
+  var deCount = words.filter(function(w){ return deWords.indexOf(w)!==-1; }).length;
+  if (deChars >= 2 || deCount >= 2) return 'de';
+
+  // French — accented chars or common words
+  var frChars = (text.match(/[éèêëàâùûîïœç]/g) || []).length;
+  var frWords = ['est','les','des','une','pour','pas','avec','vous','bonjour','merci','qui','que','sur'];
+  var frCount = words.filter(function(w){ return frWords.indexOf(w)!==-1; }).length;
+  if (frChars >= 2 || frCount >= 2) return 'fr';
+
+  // Spanish
+  var esWords = ['que','con','para','una','como','más','pero','por','hay','hola','gracias','precio','tiene'];
+  var esCount = words.filter(function(w){ return esWords.indexOf(w)!==-1; }).length;
+  var esChars = (text.match(/[áéíóúüñ¿¡]/g) || []).length;
+  if (esChars >= 2 || esCount >= 2) return 'es';
+
+  // Arabic
+  if (/[\u0600-\u06FF]/.test(text)) return 'ar';
+
+  // Chinese
+  if (/[\u4E00-\u9FFF]/.test(text)) return 'zh';
+
+  // Default English
+  return 'en';
 }
 
 function processQuery(q, lang) {
@@ -1908,13 +2377,8 @@ function callAI(q, lang, done) {
     var kbContext = buildKBContext(enrichedQuery);
 
     // ── UPGRADE 2: Confidence check ───────────────────────────
-    // If no KB rows found AND it's a product/specific question → show fallback
-    // BUT: greetings, general questions, small talk → let AI answer without KB
-    var isGreeting    = /^\s*(hi|hello|hey|good\s*(morning|afternoon|evening|day)|howdy|hola|hej|bonjour|salut|hallo|ciao|مرحبا|你好|سلام)\s*[!.]?\s*$/i.test(q.trim());
-    var isGeneralChat = /^(how are you|what can you do|what do you know|who are you|help me|what is your name|tell me about yourself|thanks|thank you|ok|okay|great|perfect|got it|sure|yes|no|alright)/i.test(q.trim());
-    var isGeneralKnowledge = q.trim().split(/\s+/).length <= 6 && !/\d{4,}/.test(q) && kbContext === '';
-
-    if (!kbContext && knowledgeRows.length > 0 && !isGreeting && !isGeneralChat && !isGeneralKnowledge) {
+    // If no relevant rows found — show fallback immediately, don't let AI hallucinate
+    if (!kbContext && knowledgeRows.length > 0) {
       removeTyping();
       appendMsg('bot', linkify(escHtml(fallbackMsg)), 'local');
       logQuery(q, lang, false, 'local', '');
@@ -2388,36 +2852,6 @@ document.addEventListener('DOMContentLoaded', function() {
   if (wm) { wm.querySelector('.welcome-title').textContent = welcomeTitle; wm.querySelector('.welcome-sub').innerHTML = welcomeSub; }
   renderSuggChips();
   renderChipList();
-
-  // Restore session after refresh — if valid saved session exists, log back in automatically
-  // Session expires after 8 hours
-  try {
-    var saved = localStorage.getItem('strands_session');
-    if (saved) {
-      var sess = JSON.parse(saved);
-      var age  = Date.now() - (sess.ts || 0);
-      var eightHours = 8 * 60 * 60 * 1000;
-      if (sess.username && age < eightHours) {
-        // Wait for Firebase to load users, then restore session
-        var restoreAttempts = 0;
-        var restoreInterval = setInterval(function() {
-          restoreAttempts++;
-          var found = users.find(function(u){ return u.username === sess.username && u.role === sess.role; });
-          if (found) {
-            clearInterval(restoreInterval);
-            loginAs(found);
-          } else if (restoreAttempts > 20) {
-            // After 10 seconds give up and show login
-            clearInterval(restoreInterval);
-            localStorage.removeItem('strands_session');
-          }
-        }, 500);
-      } else {
-        // Session expired — clear it
-        localStorage.removeItem('strands_session');
-      }
-    }
-  } catch(e) { localStorage.removeItem('strands_session'); }
 });
 </script>
 </body>
